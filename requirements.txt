@@ -1,3 +1,4 @@
 pyyaml
 scp
 paramiko
+libvirt-python
