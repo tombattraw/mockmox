@@ -1,0 +1,1 @@
+A VM management framework intended to abstract away most details of qemu/KVM VM management. I tried Proxmox but was endlessly annoyed by the layers of GUI management and dislike the CLI, so I'm building my own, since, as we all know, building projects in-house is *always* superior to a tested and widely-accepted third-party solution. 
