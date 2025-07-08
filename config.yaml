@@ -1,0 +1,18 @@
+# libvirtd is the hypervisor to connect to. This can be local or remote.
+
+# Using polkit to configure user access is strongly recommended:
+# /etc/polkit-1/rules.d/50-libvirt-remote.rules
+#  polkit.addRule(function(action, subject) {
+#      if (action.id == "org.libvirt.unix.manage" &&
+#          subject.user == "yourusername") {
+#          return polkit.Result.YES;
+#      }
+#  });
+
+# If remote, replace with a method such as this:
+# qemu+ssh://yourusername@remotehost/system
+#   Requires sharing ssh keys, or entering the creds a *lot*
+# qemu+tls://remotehost/system
+#   Requires configuring certs
+
+libvirtd: "qemu:///system"
