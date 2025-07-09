@@ -2,7 +2,6 @@ import os
 import argparse
 import pathlib
 import libvirt
-from virtinst import cli
 import yaml
 import sys
 import shutil
@@ -15,7 +14,7 @@ CONFIG_FILE = pathlib.Path("/etc/mockmox/config.yaml")
 
 GROUP_DIR = BASE_DIR / "groups"
 VM_TEMPLATE_DIR = BASE_DIR / "vms"
-ACTIVE_DIR = BASE_DIR / "active"
+INSTANCE_DIR = BASE_DIR / "instances"
 SUSPENDED_DIR = BASE_DIR / "suspended"
 DEFAULT_DIR = BASE_DIR / "defaults"
 
@@ -77,7 +76,7 @@ class VMTemplate:
                         raise FileNotFoundError(f"ISO {iso} does not exist.")
                 if existing_disk_image:
                     if not existing_disk_image.exists():
-                        raise FileNotFoundError(f"Disk iamge {existing_disk_image} does not exist.")
+                        raise FileNotFoundError(f"Disk image {existing_disk_image} does not exist.")
 
                 self.path.mkdir()
                 self.user_script_dir.mkdir()
@@ -85,14 +84,11 @@ class VMTemplate:
                 self.files_dir.mkdir()
 
                 if not existing_disk_image:
-                    subprocess.run(f"qemu-img create -f qcow2 {self.disk} {disk_size}", capture_output=False)
-                    subprocess.run(f"virt-install --name {name} --vcpus {cpus} --memory {memory} --os-variant {os_variant} --controller=scsi,model=virtio-scsi --disk path={self.disk},bus=scsi --cdrom={iso} --noreboot")
+                    subprocess.run(f"qemu-img create -f qcow2 {self.disk} {disk_size}".split(), capture_output=False, check=True)
+                    subprocess.run(f"virt-install --name {name} --vcpus {cpus} --memory {memory} --os-variant {os_variant} --controller=scsi,model=virtio-scsi --disk path={self.disk},bus=scsi --cdrom={iso} --noreboot".split(), check=True)
                 else:
                     shutil.copyfile(existing_disk_image, self.disk)
-
-
-
-
+                    subprocess.run(f"virt-install --name {name} --vcpus {cpus} --memory {memory} --os-variant {os_variant} --controller=scsi,model=virtio-scsi --disk path={existing_disk_image},bus=scsi --import --noautoconsole --noreboot".split(), check=True)
 
 
 class Group:
@@ -101,6 +97,7 @@ class Group:
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.vm_templates = []
         self.path = GROUP_DIR / name
+        self.snapshot_dir = GROUP_DIR / "snapshots"
 
         if self.path.exists():
             self.vm_templates = GROUP_DIR
@@ -171,7 +168,7 @@ if __name__ == "__main__":
     sp = arg_def.add_subparsers(dest="object")
 
     # ===== VMs =====
-    vm_sp = sp.add_parser("vm").add_subparsers(dest="action")
+    vm_sp = sp.add_parser("vm").add_subparsers(dest="action", metavar="vm_template", help="VM template management actions", required=True)
 
     vm_create = vm_sp.add_parser("create")
     vm_create.add_argument("name", help="Name of VM template")
@@ -192,8 +189,9 @@ if __name__ == "__main__":
     vm_edit = vm_sp.add_parser("edit", help="Edit a VM's configuration")
     vm_edit.add_argument("name", help="Name of VM to edit")
 
+
     # ===== Groups =====
-    group_sp = sp.add_parser("group").add_subparsers(dest="action")
+    group_sp = sp.add_parser("group").add_subparsers(dest="action", help="Group management actions", required=True)
 
     group_create = group_sp.add_parser("create")
     group_create.add_argument("name", help="Name of group")
@@ -209,38 +207,66 @@ if __name__ == "__main__":
     group_remove.add_argument("vm_name", help="VM template to remove from group")
     group_remove.add_argument("group_name", help="Group to remove VM from")
 
-    group_start = group_sp.add_parser("start")
-    group_start.add_argument("name", help="Group to start")
-
-    group_stop = group_sp.add_parser("stop")
-    group_stop.add_argument("name", help="Group to stop")
-
-    group_suspend = group_sp.add_parser("suspend")
-    group_suspend.add_argument("name", help="Group to suspend")
-
-    group_resume = group_sp.add_parser("resume")
-    group_resume.add_argument("name", help="Group to resume")
+    group_start = group_sp.add_parser("instantiate")
+    group_start.add_argument("name", help="Group to start. Becomes an \"instance\"")
 
     group_edit = group_sp.add_parser("edit", help="Edit a group's configuration")
     group_edit.add_argument("name", help="Name of group to edit")
 
+
     # ===== List =====
     list_args = sp.add_parser("list")
-    list_args.add_argument("type", choices=["active", "suspended", "vms", "groups"],
+    list_args.add_argument("type", choices=["instances", "suspended", "vm_templates", "groups"],
                            help="Type of resources to list")
 
-    # ===== Snapshot =====
-    snapshot_args = sp.add_parser("snapshot")
-    snapshot_args.add_argument("name", help="Name of snapshot")
-    snapshot_args.add_argument("-g", "--group", help="Snapshot a group")
-    snapshot_args.add_argument("-v", "--vm", help="Snapshot a single VM")
-    snapshot_args.add_argument("--live", action="store_true", help="Take live snapshot")
+    # ==== Instance ====
+    instance_sp = sp.add_parser("instance", help="Manage running instances")
+    instance_action_sp = instance_sp.add_subparsers(dest="action", help="Action to perform on instances", required=True)
+
+    instance_stop = instance_action_sp.add_parser("stop", help="Stop a running instance")
+    instance_stop.add_argument("name", help="Name of the running instance to stop")
+    instance_stop.add_argument("-v", "--vm", required=False, help="Individual VM to shut down")
+
+    instance_suspend = instance_action_sp.add_parser("suspend", help="Suspend a running instance")
+    instance_suspend.add_argument("name", help="Name of the running instance to suspend")
+    instance_suspend.add_argument("-v", "--vm", required=False, help="Individual VM to suspend")
+
+    instance_resume = instance_action_sp.add_parser("resume", help="Resume a suspended instance")
+    instance_resume.add_argument("name", help="Name of the running instance to resume")
+    instance_resume.add_argument("-v", "--vm", required=False, help="Individual VM to resume")
+
+    instance_snapshot = instance_action_sp.add_parser("snapshot", help="Snapshot a running instance")
+    instance_snapshot.add_argument("name", help="Name of the running instance to snapshot")
+    instance_snapshot.add_argument("snapshot_name", help="Name of the snapshot")
+    instance_snapshot.add_argument("-v", "--vm", required=False, help="Individual VM to snapshot")
+
+    instance_ssh = instance_action_sp.add_parser("ssh", help="SSH into a VM within a running instance")
+    instance_ssh.add_argument("instance_name", help="Name of the running instance")
+    instance_ssh.add_argument("vm_name", help="Name of the VM in the instance to SSH into")
+
 
     # ===== Enforce subcommand =====
     if len(sys.argv) == 1:
         arg_def.print_help(sys.stderr)
         sys.exit(1)
 
-    args = arg_def.parse_args()
+    ABBREVIATIONS = {
+        "i": "instance",
+        "g": "group",
+        "v": "vm",
+        "l": "list",
+        "s": "snapshot",
+        "a": "add",
+        "rm": "remove",
+        "inst": "instantiate",
+        "vt": "vm_templates"
+    }
+
+    # Replace abbreviated commands
+    expanded_argv = [
+        ABBREVIATIONS.get(arg, arg) for arg in sys.argv[1:]
+    ]
+
+    args = arg_def.parse_args(expanded_argv)
 
     import pprint; pprint.pprint(args)
