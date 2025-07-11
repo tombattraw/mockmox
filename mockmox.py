@@ -6,7 +6,7 @@ import logging
 import yaml
 
 # Backend classes
-from classes import VMTemplate, Group as BackendGroup, get_editor
+from classes import VMTemplate, Group, get_editor
 
 # Definitions here used only for installation, except for CONFIG_FILE
 # Later runs will load definitions from the config file
@@ -147,7 +147,7 @@ def group():
 @click.argument('name')
 def create(name):
     """Create a new group."""
-    grp = BackendGroup(name, GROUP_DIR)
+    grp = Group(name, GROUP_DIR)
     grp.path.mkdir(parents=True, exist_ok=False)
     grp.snapshot_dir.mkdir()
     grp.vm_template_dir.mkdir()
@@ -158,7 +158,7 @@ def create(name):
 @click.argument('name')
 def delete(name):
     """Delete a group."""
-    grp = BackendGroup(name, GROUP_DIR)
+    grp = Group(name, GROUP_DIR)
     grp.delete()
     click.echo(f"Deleted group '{name}'.")
 
@@ -168,7 +168,7 @@ def delete(name):
 @click.argument('group_name')
 def add(vm_name, group_name):
     """Add a VM template to a group."""
-    grp = BackendGroup(group_name, GROUP_DIR)
+    grp = Group(group_name, GROUP_DIR)
     vm_path = VM_TEMPLATE_DIR / vm_name
     dest = grp.vm_template_dir / vm_name
     shutil.copytree(vm_path, dest)
@@ -180,7 +180,7 @@ def add(vm_name, group_name):
 @click.argument('group_name')
 def remove(vm_name, group_name):
     """Remove a VM template from a group."""
-    grp = BackendGroup(group_name, GROUP_DIR)
+    grp = Group(group_name, GROUP_DIR)
     dest = grp.vm_template_dir / vm_name
     shutil.rmtree(dest)
     click.echo(f"Removed VM '{vm_name}' from group '{group_name}'.")
@@ -189,7 +189,7 @@ def remove(vm_name, group_name):
 @group.command()
 @click.argument('name')
 def instantiate(name):
-    """Start a group (create an instance)."""
+    """Start a group (create a set of instances)."""
     click.echo(f"Instantiated group '{name}'.")
 
 
@@ -197,7 +197,7 @@ def instantiate(name):
 @click.argument('name')
 def edit(name):
     """Edit a group's configuration."""
-    grp = BackendGroup(name, GROUP_DIR)
+    grp = Group(name, GROUP_DIR)
     config_file = grp.path / "config.yaml"
     if not config_file.exists():
         config_file.write_text("# Group configuration\n")
@@ -209,14 +209,14 @@ def edit(name):
 # ====================
 @cli.group()
 def instance():
-    """Manage running instances."""
+    """Manage running instances (running groups)"""
 
 
 @instance.command()
 @click.argument('name')
 @click.option('--vm', help="Specific VM to stop.")
 def stop(name, vm):
-    """Stop an instance or a specific VM."""
+    """Stop an instance."""
     click.echo(f"Stopping instance '{name}', target: {vm or 'all VMs'}")
 
 
