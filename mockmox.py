@@ -1,12 +1,15 @@
+#!/usr/bin/env python3
 import click
 import pathlib
 import shutil
 import subprocess
 import logging
 import yaml
+import os
 
 # Backend classes
-from classes import VMTemplate, Group, get_editor
+from classes.group import Group
+from classes.vm_template import VMTemplate, get_editor
 
 # Definitions here used only for installation, except for CONFIG_FILE
 # Later runs will load definitions from the config file
@@ -85,10 +88,11 @@ def create(name, os_variant, size, cpus, memory, existing_qcow2, iso):
 
 @vm.command()
 @click.argument('name')
-def delete(name):
+@click.argument('--acknowledge', type=bool)
+def delete(name, acknowledge):
     """Delete a VM template."""
     vm = VMTemplate(name, VM_TEMPLATE_DIR, delete=True)
-    vm.delete()
+    vm.delete(GROUP_DIR, acknowledge)
     click.echo(f"Deleted VM '{name}'.")
 
 
@@ -147,7 +151,7 @@ def group():
 @click.argument('name')
 def create(name):
     """Create a new group."""
-    grp = Group(name, GROUP_DIR)
+    grp = Group(name, GROUP_DIR, VM_TEMPLATE_DIR)
     grp.path.mkdir(parents=True, exist_ok=False)
     grp.snapshot_dir.mkdir()
     grp.vm_template_dir.mkdir()
@@ -158,7 +162,7 @@ def create(name):
 @click.argument('name')
 def delete(name):
     """Delete a group."""
-    grp = Group(name, GROUP_DIR)
+    grp = Group(name, GROUP_DIR, VM_TEMPLATE_DIR)
     grp.delete()
     click.echo(f"Deleted group '{name}'.")
 
@@ -168,7 +172,7 @@ def delete(name):
 @click.argument('group_name')
 def add(vm_name, group_name):
     """Add a VM template to a group."""
-    grp = Group(group_name, GROUP_DIR)
+    grp = Group(group_name, GROUP_DIR, VM_TEMPLATE_DIR)
     vm_path = VM_TEMPLATE_DIR / vm_name
     dest = grp.vm_template_dir / vm_name
     shutil.copytree(vm_path, dest)
@@ -180,7 +184,7 @@ def add(vm_name, group_name):
 @click.argument('group_name')
 def remove(vm_name, group_name):
     """Remove a VM template from a group."""
-    grp = Group(group_name, GROUP_DIR)
+    grp = Group(group_name, GROUP_DIR, VM_TEMPLATE_DIR)
     dest = grp.vm_template_dir / vm_name
     shutil.rmtree(dest)
     click.echo(f"Removed VM '{vm_name}' from group '{group_name}'.")
@@ -197,7 +201,7 @@ def instantiate(name):
 @click.argument('name')
 def edit(name):
     """Edit a group's configuration."""
-    grp = Group(name, GROUP_DIR)
+    grp = Group(name, GROUP_DIR, VM_TEMPLATE_DIR)
     config_file = grp.path / "config.yaml"
     if not config_file.exists():
         config_file.write_text("# Group configuration\n")
