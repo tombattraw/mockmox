@@ -1,10 +1,18 @@
 import logging
+from sqlite3 import connect
+
 import yaml
 import pathlib
 import shutil
 import subprocess
 import os
-
+import sys
+import paramiko
+import time
+from scp import SCPClient
+import uuid
+import xml.etree.ElementTree as ET
+import libvirt
 
 def get_editor():
     editor = os.environ.get('EDITOR')
@@ -32,6 +40,9 @@ class VMTemplate:
         self.user_files_dir = self.path / "user_files"
         self.root_files_dir = self.path / "root_files"
 
+        self.ip: str = ""
+        self.ssh_port: int = 0
+
         # All state is maintained by the directory structure; having the path exist means that the template exists, even if it may be horribly corrupted
         # "delete" is used to skip checks and attempts to load configuration; otherwise, it would be impossible to delete a corrupted template through the object
         if self.path.exists() and not delete:
@@ -50,6 +61,37 @@ class VMTemplate:
         self.root_executables = self.root_executable_dir.iterdir() if self.root_executable_dir.exists() else []
         self.user_files = self.user_files_dir.iterdir() if self.user_files_dir.exists() else []
         self.root_files = self.root_files_dir.iterdir() if self.root_files_dir.exists() else []
+
+
+    def attach_iso(self, iso: pathlib.Path, conn):
+        dom = conn.lookupByName(self.name)
+
+        cdrom_xml = f"""
+        <disk type='file' device='cdrom'>
+          <driver name='qemu' type='raw'/>
+          <source file='{iso.as_posix()}'/>
+          <target dev='hdc' bus='ide'/>
+          <readonly/>
+        </disk>
+        """
+
+        # Attach CD-ROM
+        dom.attachDeviceFlags(cdrom_xml, libvirt.VIR_DOMAIN_AFFECT_LIVE | libvirt.VIR_DOMAIN_AFFECT_CONFIG)
+
+
+    def detach_iso(self, iso: pathlib.Path, conn):
+        dom = conn.lookupByName(self.name)
+
+        eject_xml = f"""
+        <disk type='file' device='cdrom'>
+          <driver name='qemu' type='raw'/>
+          <source file='{iso.as_posix()}'/>
+          <target dev='hdc' bus='ide'/>
+          <readonly/>
+        </disk>
+        """
+
+        dom.updateDeviceFlags(eject_xml, libvirt.VIR_DOMAIN_AFFECT_LIVE | libvirt.VIR_DOMAIN_AFFECT_CONFIG)
 
 
     def delete(self, group_dir, acknowledge):
@@ -75,7 +117,10 @@ class VMTemplate:
     def create(self, disk_size: int,
                cpus: int,
                memory: int,
-               os_variant: str = '',
+               connection: str,
+               graphics_type: str = 'spice',
+               disk_type: str = 'virtio',
+               net_interface_type: str = 'virtio',
                existing_disk_image: pathlib.Path = None,
                iso: pathlib.Path = None):
 
@@ -100,20 +145,44 @@ class VMTemplate:
 
         if not existing_disk_image:
             subprocess.run(f"qemu-img create -f qcow2 {self.disk} {disk_size}".split(), capture_output=False, check=True)
-            cmd = f"virt-install --name {self.name} --vcpus {cpus} --memory {memory} --os-variant {os_variant} --controller=scsi,model=virtio-scsi --disk path={self.disk},bus=scsi --cdrom={iso} --noreboot"
-            try:
-                subprocess.run(cmd.split(), check=True)
-            except subprocess.CalledProcessError as E:
-                shutil.rmtree(self.path)
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd.split(), output=f"VM template creation {self.name} failed.\n{E}")
+
         else:
             shutil.copy2(existing_disk_image, self.disk)
-            cmd = f"virt-install --name {self.name} --vcpus {cpus} --memory {memory} --os-variant {os_variant} --controller=scsi,model=virtio-scsi --disk path={existing_disk_image},bus=scsi --import --noautoconsole --noreboot"
-            try:
-                subprocess.run(cmd.split(), check=True)
-            except subprocess.CalledProcessError as E:
-                shutil.rmtree(self.path)
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd.split(), output=f"VM template creation {self.name} failed.\n{E}")
+
+            domain = ET.Element('domain', type='kvm')
+            ET.SubElement(domain, 'name').text = self.name
+            ET.SubElement(domain, 'uuid').text = str(uuid.uuid4())
+            ET.SubElement(domain, 'memory', unit='MiB').text = str(memory)
+            ET.SubElement(domain, 'vcpu').text = str(cpus)
+
+            devices = ET.SubElement(domain, 'devices')
+            disk = ET.SubElement(devices, 'disk', type='file', device='disk')
+            ET.SubElement(disk, 'source', file=self.disk.as_posix())
+            ET.SubElement(disk, 'target', dev='vda', bus=disk_type)
+
+            # Add network
+            net = ET.SubElement(devices, 'interface', type='network')
+            ET.SubElement(net, 'source', network='default')
+            ET.SubElement(net, 'model', type=net_interface_type)
+
+            # Add graphics (VNC)
+            ET.SubElement(devices, 'graphics', type=graphics_type, port='-1', autoport='yes')
+
+            xml_str = ET.tostring(domain, encoding='unicode')
+
+            conn = libvirt.open(connection)
+            domain = conn.defineXML(xml_str)
+
+            self.attach_iso(iso, conn)
+
+            domain.create()
+            input(f"VM template {self.name} booting. Connect with {graphics_type} to install, then, when done, press Enter here.")
+            domain.shutdown()
+
+            self.detach_iso(iso, conn)
+            conn.close()
+
+
 
 
     def _build_and_verify_path(self, user: str, file_type: str, file: pathlib.Path = None) -> pathlib.Path:
@@ -175,6 +244,39 @@ class VMTemplate:
 
         tmp_file.replace(self.config_file)
         print(f"Configuration changes applied to {self.config_file}")
+
+
+    def get_IP(self, instance_id: str, connection: str):
+        import libvirt
+
+        conn = libvirt.open(connection)
+        domain = conn.lookupByName(instance_id)
+
+        ifaces = domain.interfaceAddresses(libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
+        ips = []
+        for iface_name, val in ifaces.items():
+            if val['addrs']:
+                for addr in val['addrs']:
+                    ips.append(addr['addr'])
+        conn.close()
+
+        return ips
+
+
+    def add_ssh_key(self, existing_key: pathlib.Path, user: str, instance_id: str):
+        password = os.environ.get("PASSWORD")
+        if not password:
+            raise ValueError(f"You must supply a password with the environment variable \"PASSWORD\": \"PASSWORD=<yourpassword> python3 {sys.argv[0]} vm add ssh_key")
+
+        self.get_IP(instance_id)
+
+        socket = paramiko.SSHClient()
+        socket.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        socket.connect(hostname=self.ip, port = 22, username = user, password = password)
+
+        scpsocket = SCPClient(socket.get_transport())
+
+        scpsocket.put(existing_key, f"~/.ssh/{existing_key.name}")
 
 
     def start(self):
