@@ -4,57 +4,46 @@ import pathlib
 import shutil
 import subprocess
 import logging
-import yaml
-import os
+import sys
 
 # Backend classes
 from classes.group import Group
 from classes.vm_template import VMTemplate, get_editor
+from classes.config import load_config, DEFAULT_CONFIG_FILE, DEFAULT_SOCKET
 
-# Definitions here used only for installation, except for CONFIG_FILE
-# Later runs will load definitions from the config file
+# Yes, globals suck. Unfortunately, I'm not dealing with loading this in every subordinate function
+# And, because click is aggressively unhelpful when you need to load variables first...
+# here comes the ugliest hack you'll ever see:
+try:
+    idx = sys.argv.index('--config-file')
+    config_file = pathlib.Path(sys.argv[idx + 1])
+except (ValueError, IndexError):
+    config_file = DEFAULT_CONFIG_FILE
 
-CONFIG_FILE = pathlib.Path("/etc/mockmox/config.yaml")
-if CONFIG_FILE.exists():
-    try:
-        config = yaml.safe_load(CONFIG_FILE.read_text())
-    except yaml.YAMLError as E:
-        raise yaml.YAMLError(f"Config file {CONFIG_FILE} has invalid YAML syntax. Edit or reinstall to fix.\n{E}")
-    except PermissionError as E:
-        raise PermissionError(f"Config file {CONFIG_FILE} cannot be read. Add read permissions to fix.\n{E}")
-else:
-    config = {}
+try:
+    idx = sys.argv.index('--libvirtd')
+    libvirtd = sys.argv[idx + 1]
+except (ValueError, IndexError):
+    libvirtd = DEFAULT_SOCKET
 
-# If config has directories key with base_dir key, use that value. Else, use the final value
-BASE_DIR = pathlib.Path(config.get("directories", {}).get("base_dir", "/opt/mockmox"))
-GROUP_DIR = BASE_DIR / "groups"
-VM_TEMPLATE_DIR = BASE_DIR / "vms"
-INSTANCE_DIR = BASE_DIR / "instances"
-SUSPENDED_DIR = BASE_DIR / "suspended"
-DEFAULT_DIR = BASE_DIR / "defaults"
+CONFIG = load_config(config_file, libvirtd)
 
-SCRIPT_LOCATION = pathlib.Path(config.get("directories", {}).get("base_dir", "/bin/mockmox"))
-
-VM_DEFAULT_DISK_SIZE = config.get("defaults", {}).get("vm_disk_size", 64) # GB
-VM_DEFAULT_CPUS = config.get("defaults", {}).get("vm_cpus", 4)
-VM_DEFAULT_MEMORY = config.get("defaults", {}).get("vm_memory", 8192) # MB
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(message)s"
 )
 
-
 @click.group()
 @click.option('--libvirtd', default="qemu:///system", help="Libvirtd hypervisor connection string.")
-@click.option('--config', type=click.Path(), default=CONFIG_FILE, help="Path to config file.")
+@click.option('--config-file', type=click.Path(), default=DEFAULT_CONFIG_FILE, help="Path to config file.")
 @click.option('--verbose', is_flag=True, help="Enable verbose output.")
 @click.pass_context
-def cli(ctx, libvirtd, config, verbose):
+def cli(ctx, libvirtd, config_file, verbose):
     """Mockmox: VM and group management framework."""
     ctx.ensure_object(dict)
     ctx.obj['LIBVIRTD'] = libvirtd
-    ctx.obj['CONFIG'] = config
+    ctx.obj['CONFIG_FILE'] = config_file
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     else:
@@ -71,18 +60,24 @@ def vm():
 
 @vm.command()
 @click.argument('name')
-@click.option('--os-variant', required=True, help="See valid choices with 'virt-install --os-variant list'")
-@click.option('-s', '--size', default=VM_DEFAULT_DISK_SIZE, help="Disk size in GB (default: %(default)s)")
-@click.option('-c', '--cpus', default=VM_DEFAULT_CPUS, help="Number of CPUs (default: %(default)s)")
-@click.option('-m', '--memory', default=VM_DEFAULT_MEMORY, help="Memory size in MB (default: %(default)s)")
-@click.option('--existing-qcow2', type=click.Path(), help="Use existing disk image")
+@click.option('-s', '--size', default=CONFIG['vm_default_disk_size'], help=f"Disk size in GB (default: {CONFIG['vm_default_disk_size']})")
+@click.option('-c', '--cpus', default=CONFIG['vm_default_cpus'], help=f"Number of CPUs (default: {CONFIG['vm_default_cpus']})")
+@click.option('-m', '--memory', default=CONFIG['vm_default_memory'], help=f"Memory size in MB (default: {CONFIG['vm_default_memory']}")
+@click.option('--existing-qcow2', type=click.Path(), help=f"Use existing disk image")
 @click.option('-i', '--iso', type=click.Path(), help="Path to installation ISO")
-def create(name, os_variant, size, cpus, memory, existing_qcow2, iso):
+def create(name, size, cpus, memory, existing_qcow2, iso):
     """Create a new VM template."""
-    vm = VMTemplate(name, VM_TEMPLATE_DIR)
+    vm = VMTemplate(name, CONFIG['vm_template_dir'])
     existing_disk = pathlib.Path(existing_qcow2) if existing_qcow2 else None
     iso_path = pathlib.Path(iso) if iso else None
-    vm.create(os_variant, size, cpus, memory, existing_disk, iso_path)
+    vm.create(
+        disk_size=size,
+        cpus=cpus,
+        memory=memory,
+        existing_disk_image=existing_disk,
+        iso=iso_path,
+        connection=CONFIG['connection'])
+
     click.echo(f"VM '{name}' created.")
 
 
@@ -91,8 +86,8 @@ def create(name, os_variant, size, cpus, memory, existing_qcow2, iso):
 @click.argument('--acknowledge', type=bool)
 def delete(name, acknowledge):
     """Delete a VM template."""
-    vm = VMTemplate(name, VM_TEMPLATE_DIR, delete=True)
-    vm.delete(GROUP_DIR, acknowledge)
+    vm = VMTemplate(name, CONFIG['vm_template_dir'], delete=True)
+    vm.delete(CONFIG['vm_group_dir'], acknowledge)
     click.echo(f"Deleted VM '{name}'.")
 
 
@@ -100,7 +95,7 @@ def delete(name, acknowledge):
 @click.argument('name')
 def edit(name):
     """Edit a VM template's configuration."""
-    vm = VMTemplate(name, VM_TEMPLATE_DIR)
+    vm = VMTemplate(name, CONFIG['vm_template_dir'])
     vm.edit()
 
 
@@ -110,7 +105,7 @@ def edit(name):
 @click.option('-t', '--type', type=click.Choice(['file', 'executable']), required=True, help="File or executable?")
 def list_files(name, user, type):
     """List files/scripts owned by a VM template."""
-    vm = VMTemplate(name, VM_TEMPLATE_DIR)
+    vm = VMTemplate(name, CONFIG['vm_template_dir'])
     files = vm.list_files(user, type)
     click.echo(files)
 
@@ -122,7 +117,7 @@ def list_files(name, user, type):
 @click.option('-t', '--type', type=click.Choice(['file', 'executable']), required=True, help="File type.")
 def add_file(name, source_file, user, type):
     """Add a file or executable to a VM template."""
-    vm = VMTemplate(name, VM_TEMPLATE_DIR)
+    vm = VMTemplate(name, CONFIG['vm_template_dir'])
     vm.add_file(pathlib.Path(source_file), user, type)
     click.echo(f"Added {type} '{source_file}' to VM '{name}' as {user}.")
 
@@ -134,7 +129,7 @@ def add_file(name, source_file, user, type):
 @click.option('-t', '--type', type=click.Choice(['file', 'executable']), required=True)
 def remove_file(name, source_file, user, type):
     """Remove a file or executable from a VM template."""
-    vm = VMTemplate(name, VM_TEMPLATE_DIR)
+    vm = VMTemplate(name, CONFIG['vm_template_dir'])
     vm.remove_file(pathlib.Path(source_file), user, type)
     click.echo(f"Removed {type} '{source_file}' from VM '{name}' as {user}.")
 
@@ -151,7 +146,7 @@ def group():
 @click.argument('name')
 def create(name):
     """Create a new group."""
-    grp = Group(name, GROUP_DIR, VM_TEMPLATE_DIR)
+    grp = Group(name, CONFIG['vm_group_dir'], CONFIG['vm_template_dir'])
     grp.path.mkdir(parents=True, exist_ok=False)
     grp.snapshot_dir.mkdir()
     grp.vm_template_dir.mkdir()
@@ -162,7 +157,7 @@ def create(name):
 @click.argument('name')
 def delete(name):
     """Delete a group."""
-    grp = Group(name, GROUP_DIR, VM_TEMPLATE_DIR)
+    grp = Group(name, CONFIG['vm_group_dir'], CONFIG['vm_template_dir'])
     grp.delete()
     click.echo(f"Deleted group '{name}'.")
 
@@ -172,8 +167,8 @@ def delete(name):
 @click.argument('group_name')
 def add(vm_name, group_name):
     """Add a VM template to a group."""
-    grp = Group(group_name, GROUP_DIR, VM_TEMPLATE_DIR)
-    vm_path = VM_TEMPLATE_DIR / vm_name
+    grp = Group(group_name, CONFIG['vm_group_dir'], CONFIG['vm_template_dir'])
+    vm_path = CONFIG['vm_template_dir'] / vm_name
     dest = grp.vm_template_dir / vm_name
     shutil.copytree(vm_path, dest)
     click.echo(f"Added VM '{vm_name}' to group '{group_name}'.")
@@ -184,7 +179,7 @@ def add(vm_name, group_name):
 @click.argument('group_name')
 def remove(vm_name, group_name):
     """Remove a VM template from a group."""
-    grp = Group(group_name, GROUP_DIR, VM_TEMPLATE_DIR)
+    grp = Group(group_name, CONFIG['vm_group_dir'], CONFIG['vm_template_dir'])
     dest = grp.vm_template_dir / vm_name
     shutil.rmtree(dest)
     click.echo(f"Removed VM '{vm_name}' from group '{group_name}'.")
@@ -201,7 +196,7 @@ def instantiate(name):
 @click.argument('name')
 def edit(name):
     """Edit a group's configuration."""
-    grp = Group(name, GROUP_DIR, VM_TEMPLATE_DIR)
+    grp = Group(name, CONFIG['vm_group_dir'], CONFIG['vm_template_dir'])
     config_file = grp.path / "config.yaml"
     if not config_file.exists():
         config_file.write_text("# Group configuration\n")

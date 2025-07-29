@@ -263,12 +263,12 @@ class VMTemplate:
         return ips
 
 
-    def add_ssh_key(self, existing_key: pathlib.Path, user: str, instance_id: str):
+    def add_ssh_key(self, existing_key: pathlib.Path, user: str, instance_id: str, connection):
         password = os.environ.get("PASSWORD")
         if not password:
             raise ValueError(f"You must supply a password with the environment variable \"PASSWORD\": \"PASSWORD=<yourpassword> python3 {sys.argv[0]} vm add ssh_key")
 
-        self.get_IP(instance_id)
+        self.get_IP(instance_id, connection)
 
         socket = paramiko.SSHClient()
         socket.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -276,7 +276,8 @@ class VMTemplate:
 
         scpsocket = SCPClient(socket.get_transport())
 
-        scpsocket.put(existing_key, f"~/.ssh/{existing_key.name}")
+        scpsocket.put(existing_key, f"~/.ssh/authorized_keys")
+
 
 
     def start(self):
