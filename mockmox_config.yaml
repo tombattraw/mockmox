@@ -14,5 +14,22 @@
 #   Requires sharing ssh keys, or entering the creds a *lot*
 # qemu+tls://remotehost/system
 #   Requires configuring certs
-
 libvirtd: "qemu:///system"
+
+
+directories:
+  # Base holds the bulk of everything - the templates, active disks, suspended instances, the works
+  base_dir: "/opt/mockmox"
+
+  # Script location is how you want to execute it. It's a soft link to the script inside the base directory
+  # Using somewhere inside your path is strongly recommended
+  script_location: "/bin/mockmox"
+
+
+defaults:
+  # Default size for VM disk. Given in GB
+  vm_disk_size: 64
+  # Default vCPUs to assign to VMs
+  vm_cpus: 4
+  # Default memory to assign to VMs. Given in MB
+  vm_memory: 8192

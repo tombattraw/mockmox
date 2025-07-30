@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import logging
 import sys
+import libvirt
 
 # Backend classes
 from classes.group import Group
@@ -70,13 +71,16 @@ def create(name, size, cpus, memory, existing_qcow2, iso):
     vm = VMTemplate(name, CONFIG['vm_template_dir'])
     existing_disk = pathlib.Path(existing_qcow2) if existing_qcow2 else None
     iso_path = pathlib.Path(iso) if iso else None
+    connection = libvirt.open(CONFIG['qemu_socket'])
     vm.create(
         disk_size=size,
         cpus=cpus,
         memory=memory,
         existing_disk_image=existing_disk,
         iso=iso_path,
-        connection=CONFIG['connection'])
+        connection=connection)
+
+    connection.close()
 
     click.echo(f"VM '{name}' created.")
 

@@ -1,0 +1,3 @@
+# All structure is given in the group directory: base_directory / groups / <group name>
+# VM templates go in <group directory> / <vms>
+
