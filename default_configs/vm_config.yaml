@@ -1,0 +1,5 @@
+# All structure is controlled by directory structure in base_directory / vms / <vm name>
+# This controls details that cannot fit there
+
+
+ssh_port: 22

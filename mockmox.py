@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import os
+
 import click
 import pathlib
 import shutil
@@ -9,7 +11,7 @@ import libvirt
 
 # Backend classes
 from classes.group import Group
-from classes.vm_template import VMTemplate, get_editor
+from classes.vm_template import VMTemplate
 from classes.config import load_config, DEFAULT_CONFIG_FILE, DEFAULT_SOCKET
 
 # Yes, globals suck. Unfortunately, I'm not dealing with loading this in every subordinate function
@@ -264,6 +266,31 @@ def ssh(instance_name, vm_name):
 def list(type):
     """List resources."""
     click.echo(f"Listing {type}...")
+
+
+@cli.command()
+def install():
+    """Install the script"""
+    base_dir = pathlib.Path(CONFIG["directories"]["base_dir"])
+    if not base_dir.parent.exists():
+        raise FileNotFoundError(f"The parent directory of the base directory {base_dir}, specified in {config_file}, does not exist.")
+
+    script_location = pathlib.Path(CONFIG["directories"]["script_location"])
+    if not script_location.parent.exists():
+        raise FileNotFoundError(
+            f"The parent directory of the script location {script_location} specified in {config_file}, does not exist.")
+
+    base_dir.mkdir()
+    (base_dir / "groups").mkdir()
+    (base_dir / "vm_templates").mkdir()
+    (base_dir / "active").mkdir()
+    (base_dir / "suspended").mkdir()
+    (base_dir / "defaults").mkdir()
+
+    shutil.copytree(pathlib.Path(__file__).parent, base_dir)
+    os.symlink(base_dir / "mockmox.py", script_location)
+
+
 
 
 if __name__ == "__main__":

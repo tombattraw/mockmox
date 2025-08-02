@@ -6,24 +6,10 @@ import pathlib
 import shutil
 import subprocess
 import os
-import sys
-import paramiko
-import time
-from scp import SCPClient
 import uuid
 import xml.etree.ElementTree as ET
 import libvirt
-
-def get_editor():
-    editor = os.environ.get('EDITOR')
-    if editor: return editor
-    editor = os.environ.get('VISUAL')
-    if editor: return editor
-
-    for fallback in ['nano', 'vim', 'vi']:
-        if shutil.which(fallback):
-            return fallback
-    raise RuntimeError("No editor found. Set the EDITOR environment variable.")
+from .common import get_editor
 
 
 class VMTemplate:
@@ -39,6 +25,10 @@ class VMTemplate:
         self.root_executable_dir = self.path / "root_executables"
         self.user_files_dir = self.path / "user_files"
         self.root_files_dir = self.path / "root_files"
+
+        # SSH keys should be named by user
+        self.ssh_key_dir = self.path / "ssh"
+        self.ssh_keyfiles = self.ssh_key_dir.iterdir() if self.ssh_key_dir.exists() else []
 
         self.ip: str = ""
         self.ssh_port: int = 0
@@ -56,7 +46,7 @@ class VMTemplate:
             except yaml.YAMLError as E:
                 raise yaml.YAMLError(f"VM template {self.name} has an invalid configuration file: {self.config_file}\n{E}")
 
-        # executables and files aren't mandatory
+        # Executables and files aren't mandatory
         self.user_executables = self.user_executable_dir.iterdir() if self.user_executable_dir.exists() else []
         self.root_executables = self.root_executable_dir.iterdir() if self.root_executable_dir.exists() else []
         self.user_files = self.user_files_dir.iterdir() if self.user_files_dir.exists() else []
@@ -138,6 +128,7 @@ class VMTemplate:
                 raise FileNotFoundError(f"Disk image {existing_disk_image} does not exist.")
 
         self.path.mkdir()
+        self.ssh_key_dir.mkdir()
         self.user_executable_dir.mkdir()
         self.root_executable_dir.mkdir()
         self.user_files_dir.mkdir()
@@ -181,8 +172,6 @@ class VMTemplate:
 
             self.detach_iso(iso, conn)
             conn.close()
-
-
 
 
     def _build_and_verify_path(self, user: str, file_type: str, file: pathlib.Path = None) -> pathlib.Path:
@@ -263,21 +252,19 @@ class VMTemplate:
         return ips
 
 
-    def add_ssh_key(self, existing_key: pathlib.Path, user: str, instance_id: str, connection):
-        password = os.environ.get("PASSWORD")
-        if not password:
-            raise ValueError(f"You must supply a password with the environment variable \"PASSWORD\": \"PASSWORD=<yourpassword> python3 {sys.argv[0]} vm add ssh_key")
+    def add_ssh_key(self, existing_key: pathlib.Path, user: str):
+        if not existing_key.exists():
+            raise FileNotFoundError(f"Key {existing_key} does not exist.")
 
-        self.get_IP(instance_id, connection)
+        shutil.copy2(existing_key, self.ssh_key_dir / user)
+        os.chmod(self.ssh_key_dir / user, 0o0600)
 
-        socket = paramiko.SSHClient()
-        socket.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        socket.connect(hostname=self.ip, port = 22, username = user, password = password)
 
-        scpsocket = SCPClient(socket.get_transport())
+    def remove_ssh_key(self, user):
+        if not user in [x.name for x in self.ssh_keyfiles]:
+            raise ValueError(f"No key file could be found for {user}")
 
-        scpsocket.put(existing_key, f"~/.ssh/authorized_keys")
-
+        (self.ssh_key_dir / user).unlink()
 
 
     def start(self):

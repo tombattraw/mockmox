@@ -19,7 +19,7 @@ def load_config(config_file: pathlib.Path, qemu_socket: str):
     # If config has directories key with base_dir key, use that value. Else, use the final value
     base_dir = pathlib.Path(config.get("directories", {}).get("base_dir", "/opt/mockmox"))
     config['group_dir'] = base_dir / "groups"
-    config['vm_template_dir'] = base_dir / "vms"
+    config['vm_template_dir'] = base_dir / "vms_templates"
     config['instance_dir'] = base_dir / "instances"
     config['suspended_dir'] = base_dir / "suspended"
     config['default_dir'] = base_dir / "defaults"
