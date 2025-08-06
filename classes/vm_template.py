@@ -1,6 +1,4 @@
 import logging
-from sqlite3 import connect
-
 import yaml
 import pathlib
 import shutil
@@ -13,7 +11,7 @@ from .common import get_editor
 
 
 class VMTemplate:
-    def __init__(self, name: str, vm_template_dir: pathlib.Path, delete: bool = False):
+    def __init__(self, name: str, vm_template_dir: pathlib.Path, connection: libvirt.virConnect, delete: bool = False):
         self.name = name
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.path = vm_template_dir / name
@@ -32,6 +30,8 @@ class VMTemplate:
 
         self.ip: str = ""
         self.ssh_port: int = 0
+
+        self.connection: libvirt.virConnect = connection
 
         # All state is maintained by the directory structure; having the path exist means that the template exists, even if it may be horribly corrupted
         # "delete" is used to skip checks and attempts to load configuration; otherwise, it would be impossible to delete a corrupted template through the object
@@ -235,23 +235,6 @@ class VMTemplate:
         print(f"Configuration changes applied to {self.config_file}")
 
 
-    def get_IP(self, instance_id: str, connection: str):
-        import libvirt
-
-        conn = libvirt.open(connection)
-        domain = conn.lookupByName(instance_id)
-
-        ifaces = domain.interfaceAddresses(libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
-        ips = []
-        for iface_name, val in ifaces.items():
-            if val['addrs']:
-                for addr in val['addrs']:
-                    ips.append(addr['addr'])
-        conn.close()
-
-        return ips
-
-
     def add_ssh_key(self, existing_key: pathlib.Path, user: str):
         if not existing_key.exists():
             raise FileNotFoundError(f"Key {existing_key} does not exist.")
@@ -269,18 +252,3 @@ class VMTemplate:
 
     def start(self):
         pass # to implement
-
-    def stop(self):
-        pass
-
-    def suspend(self):
-        pass
-
-    def resume(self):
-        pass
-
-    def snapshot(self):
-        pass
-
-    def rollback(self):
-        pass
