@@ -14,7 +14,7 @@
 #   Requires sharing ssh keys, or entering the creds a *lot*
 # qemu+tls://remotehost/system
 #   Requires configuring certs
-libvirtd: "qemu:///system"
+libvirtd_connection: "qemu:///system"
 
 
 directories:

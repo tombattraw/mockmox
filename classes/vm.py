@@ -1,9 +1,13 @@
 from vm_template import VMTemplate
-import shutil
-import pathlib
 import libvirt
+import pathlib
 
 class VM(VMTemplate):
+    def __init__(self, id: int, name: str, vm_template_dir: pathlib.Path, connection: libvirt.virConnect):
+        super().__init__(name, vm_template_dir, connection)
+        self.domain = f"{self.name}_{id}"
+
+
     def get_IP(self, instance_id: str):
         domain = self.connection.lookupByName(instance_id)
 

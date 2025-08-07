@@ -7,6 +7,7 @@ import os
 import uuid
 import xml.etree.ElementTree as ET
 import libvirt
+import glob
 from .common import get_editor
 
 
@@ -28,9 +29,6 @@ class VMTemplate:
         self.ssh_key_dir = self.path / "ssh"
         self.ssh_keyfiles = self.ssh_key_dir.iterdir() if self.ssh_key_dir.exists() else []
 
-        self.ip: str = ""
-        self.ssh_port: int = 0
-
         self.connection: libvirt.virConnect = connection
 
         # All state is maintained by the directory structure; having the path exist means that the template exists, even if it may be horribly corrupted
@@ -46,6 +44,9 @@ class VMTemplate:
             except yaml.YAMLError as E:
                 raise yaml.YAMLError(f"VM template {self.name} has an invalid configuration file: {self.config_file}\n{E}")
 
+        self.ip: str = ""
+        self.ssh_port: int = self.config.get("ssh_port", 22)
+
         # Executables and files aren't mandatory
         self.user_executables = self.user_executable_dir.iterdir() if self.user_executable_dir.exists() else []
         self.root_executables = self.root_executable_dir.iterdir() if self.root_executable_dir.exists() else []
@@ -53,8 +54,8 @@ class VMTemplate:
         self.root_files = self.root_files_dir.iterdir() if self.root_files_dir.exists() else []
 
 
-    def attach_iso(self, iso: pathlib.Path, conn):
-        dom = conn.lookupByName(self.name)
+    def attach_iso(self, iso: pathlib.Path, connection: libvirt.virConnect):
+        dom = connection.lookupByName(self.name)
 
         cdrom_xml = f"""
         <disk type='file' device='cdrom'>
@@ -69,8 +70,8 @@ class VMTemplate:
         dom.attachDeviceFlags(cdrom_xml, libvirt.VIR_DOMAIN_AFFECT_LIVE | libvirt.VIR_DOMAIN_AFFECT_CONFIG)
 
 
-    def detach_iso(self, iso: pathlib.Path, conn):
-        dom = conn.lookupByName(self.name)
+    def detach_iso(self, iso: pathlib.Path, connection: libvirt.virConnect):
+        dom = connection.lookupByName(self.name)
 
         eject_xml = f"""
         <disk type='file' device='cdrom'>
@@ -107,7 +108,6 @@ class VMTemplate:
     def create(self, disk_size: int,
                cpus: int,
                memory: int,
-               connection: str,
                graphics_type: str = 'spice',
                disk_type: str = 'virtio',
                net_interface_type: str = 'virtio',
@@ -161,17 +161,15 @@ class VMTemplate:
 
             xml_str = ET.tostring(domain, encoding='unicode')
 
-            conn = libvirt.open(connection)
-            domain = conn.defineXML(xml_str)
+            domain = self.connection.defineXML(xml_str)
 
-            self.attach_iso(iso, conn)
+            self.attach_iso(iso, self.connection)
 
             domain.create()
             input(f"VM template {self.name} booting. Connect with {graphics_type} to install, then, when done, press Enter here.")
             domain.shutdown()
 
-            self.detach_iso(iso, conn)
-            conn.close()
+            self.detach_iso(iso, self.connection)
 
 
     def _build_and_verify_path(self, user: str, file_type: str, file: pathlib.Path = None) -> pathlib.Path:
@@ -250,5 +248,11 @@ class VMTemplate:
         (self.ssh_key_dir / user).unlink()
 
 
-    def start(self):
-        pass # to implement
+    def start(self, active_dir: pathlib.Path):
+        # Start by getting new name
+        taken_names = [pathlib.Path(x).name for x in glob.glob(f"{active_dir.as_posix()}/{self.name}_*")]
+        for id in range(1000):
+            if f"{self.name}_{id}" not in taken_names:
+                break
+
+        

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-
 import click
 import pathlib
 import shutil
@@ -10,6 +9,7 @@ import sys
 import libvirt
 
 # Backend classes
+from classes.common import get_editor
 from classes.group import Group
 from classes.vm_template import VMTemplate
 from classes.config import load_config, DEFAULT_CONFIG_FILE, DEFAULT_SOCKET
@@ -24,12 +24,13 @@ except (ValueError, IndexError):
     config_file = DEFAULT_CONFIG_FILE
 
 try:
-    idx = sys.argv.index('--libvirtd')
-    libvirtd = sys.argv[idx + 1]
+    idx = sys.argv.index('--libvirtd-connection')
+    libvirtd_connection = sys.argv[idx + 1]
 except (ValueError, IndexError):
-    libvirtd = DEFAULT_SOCKET
+    libvirtd_connection = DEFAULT_SOCKET
 
-CONFIG = load_config(config_file, libvirtd)
+CONFIG = load_config(config_file, libvirtd_connection)
+CONNECTION = libvirt.open(CONFIG["libvirtd_connection"])
 
 
 logging.basicConfig(
@@ -38,14 +39,14 @@ logging.basicConfig(
 )
 
 @click.group()
-@click.option('--libvirtd', default="qemu:///system", help="Libvirtd hypervisor connection string.")
+@click.option('--libvirtd-connection', default="qemu:///system", help="Libvirtd hypervisor connection string.")
 @click.option('--config-file', type=click.Path(), default=DEFAULT_CONFIG_FILE, help="Path to config file.")
 @click.option('--verbose', is_flag=True, help="Enable verbose output.")
 @click.pass_context
-def cli(ctx, libvirtd, config_file, verbose):
+def cli(ctx, libvirtd_connection, config_file, verbose):
     """Mockmox: VM and group management framework."""
     ctx.ensure_object(dict)
-    ctx.obj['LIBVIRTD'] = libvirtd
+    ctx.obj['LIBVIRTD_CONNECTION'] = libvirtd_connection
     ctx.obj['CONFIG_FILE'] = config_file
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -70,17 +71,15 @@ def vm():
 @click.option('-i', '--iso', type=click.Path(), help="Path to installation ISO")
 def create(name, size, cpus, memory, existing_qcow2, iso):
     """Create a new VM template."""
-    vm = VMTemplate(name, CONFIG['vm_template_dir'])
+    vm = VMTemplate(name, CONFIG['vm_template_dir'], CONNECTION)
     existing_disk = pathlib.Path(existing_qcow2) if existing_qcow2 else None
     iso_path = pathlib.Path(iso) if iso else None
-    connection = libvirt.open(CONFIG['qemu_socket'])
     vm.create(
         disk_size=size,
         cpus=cpus,
         memory=memory,
         existing_disk_image=existing_disk,
-        iso=iso_path,
-        connection=connection)
+        iso=iso_path)
 
     connection.close()
 

@@ -5,7 +5,7 @@ import libvirt
 DEFAULT_CONFIG_FILE = pathlib.Path("/etc/mockmox/config.yaml")
 DEFAULT_SOCKET = "qemu:///system"
 
-def load_config(config_file: pathlib.Path, qemu_socket: str):
+def load_config(config_file: pathlib.Path, libvirtd_connection: str):
     if config_file.exists():
         try:
             config = yaml.safe_load(config_file.read_text())
@@ -30,9 +30,9 @@ def load_config(config_file: pathlib.Path, qemu_socket: str):
     config['vm_default_cpus'] = config.get("defaults", {}).get("vm_cpus", 4)
     config['vm_default_memory'] = config.get("defaults", {}).get("vm_memory", 8192) # MB
 
-    if not qemu_socket:
-        config['qemu_socket'] = config.get("defaults", {}).get("qemu_socket", DEFAULT_SOCKET)
+    if not libvirtd_connection:
+        config['libvirtd_connection'] = config.get("defaults", {}).get("libvirtd_connection", DEFAULT_SOCKET)
     else:
-        config['qemu_socket'] = qemu_socket
+        config['libvirtd_connection'] = libvirtd_connection
 
     return config
